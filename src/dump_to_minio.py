@@ -1,14 +1,12 @@
 ########################################## 
-###  This file uploads the data in ../data/raw to MinIO
+###  This file uploads the data in ../data to MinIO
 ##########################################
 
 from minio import Minio
 import os
 
 
-
-
-def write_Data_To_MinIO():
+def dump_to_minio():
     print("\033[1;32m        ########    Uploading Data To MinIO!\033[0m")
 
     minioClient = Minio( # Client MinIO 
@@ -18,14 +16,14 @@ def write_Data_To_MinIO():
         secret_key="minio123"
     )
 
-    bucket = "MSPR-MinIO-Bucket"  
+    bucket = "mspr-minio-bucket"  
     # Create the bucket if it doesn't exist
     if not minioClient.bucket_exists(bucket):
         minioClient.make_bucket(bucket)
         print(f"Bucket '{bucket}' created.")
     
     clean_minio_bucket(minioClient, bucket) # Clean MinIO before uploading
-    baseDir = os.path.abspath("../../data") # Path to the folder containing the files
+    baseDir = os.path.abspath("../data") # Path to the folder containing the files
 
     try:
         for root, _, files in os.walk(baseDir):  # Iterate through all files in the folder and upload them # Ignore dirs by replacing it with '_'
