@@ -1,55 +1,58 @@
-version: "3.8"
-
 services:
-  minio:
-    image: minio/minio
-    container_name: minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    command: ["server", "/data", "--console-address", ":9001"]
-    volumes:
-      - ./minio:/data
-    environment:
-      - MINIO_ROOT_USER=minio
-      - MINIO_ROOT_PASSWORD=minio123
-    networks:
-      - spark-network
+    minio:
+        image: minio/minio
+        container_name: minio
+        ports:
+        - "9000:9000"
+        - "9001:9001"
+        command: ["server", "/data", "--console-address", ":9001"]
+        volumes:
+        - ./minio:/data
+        environment:
+        - MINIO_ROOT_USER=minio
+        - MINIO_ROOT_PASSWORD=minio123
+        networks:
+        - spark-network
 
-  spark-master:
-    image: apache/spark:3.5.0
-    tty: true
-    stdin_open: true
-    hostname: spark-master
-    ports:
-      - "7077:7077"
-      - "8080:8080"
-    environment:
-      - SPARK_LOCAL_IP=spark-master
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - spark-network
+    spark-master:
+        image: apache/spark:latest
+        hostname: spark-master
+        container_name: spark-master
+        ports:
+        - "7077:7077"
+        - "8080:8080"
+        environment:
+        - SPARK_LOCAL_IP=spark-master
+        command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+        networks:
+        - spark-network
 
-  spark-worker:
-    image: apache/spark:3.5.0
-    tty: true
-    stdin_open: true
-    container_name: spark-worker
-    depends_on:
-      - spark-master
-    environment:
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2g
-      - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_LOCAL_IP=spark-worker
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - spark-network
+    spark-worker:
+        image: apache/spark:latest
+        container_name: spark-worker
+        depends_on:
+        - spark-master
+        environment:
+        - SPARK_WORKER_CORES=2
+        - SPARK_WORKER_MEMORY=2g
+        command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+        networks:
+        - spark-network
+        
+    spark-client:
+        build: ./src  # Assure-toi qu’il y a un Dockerfile dans ce dossier
+        container_name: spark-client
+        depends_on:
+        - spark-master
+        - spark-worker
+        - minio
+        networks:
+        - spark-network
+        volumes:
+        - ./src:/app
+        working_dir: /app
+        command: ["python", "main.py"]
 
 networks:
-  spark-network:
-    driver: bridge
+    spark-network:
+        driver: bridge
