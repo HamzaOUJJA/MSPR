@@ -1,13 +1,9 @@
-########################################## 
-###  This file uploads the data in ../data to MinIO
-##########################################
-
 from minio import Minio
 import os
 
 
 def dump_to_minio():
-    print("\033[1;32m        ########    Uploading Data To MinIO!\033[0m")
+    print("\033[1;32m ######## Uploading Data To MinIO!\033[0m")
 
     minioClient = Minio( # Client MinIO 
         "localhost:9000",
@@ -21,13 +17,16 @@ def dump_to_minio():
     if not minioClient.bucket_exists(bucket):
         minioClient.make_bucket(bucket)
         print(f"Bucket '{bucket}' created.")
-    
-    clean_minio_bucket(minioClient, bucket) # Clean MinIO before uploading
-    baseDir = os.path.abspath("../data") # Path to the folder containing the files
+
+    #clean_minio_bucket(minioClient, bucket) # Clean MinIO before uploading
+    baseDir = os.path.abspath("../raw/data") # Path to the folder containing the files
 
     try:
         for root, _, files in os.walk(baseDir):  # Iterate through all files in the folder and upload them # Ignore dirs by replacing it with '_'
             for file in files:
+                # Upload only CSV or CSV.GZ files
+                if not file.lower().endswith(('.csv', '.csv.gz')):
+                    continue
                 file_path = os.path.join(root, file)
                 object_name = os.path.relpath(file_path, baseDir)  # Preserve folder structure
 
@@ -41,7 +40,7 @@ def dump_to_minio():
                     return 0
         return 1
     except Exception as e:
-        print("\033[1;31m        ########    Problem Occured While Uploading Data To MinIO\033[0m")
+        print("\033[1;31m ######## Problem Occured While Uploading Data To MinIO\033[0m")
         print(e)
         return 0
 
@@ -52,4 +51,4 @@ def clean_minio_bucket(minio_client, bucket):
         objects = minio_client.list_objects(bucket, recursive=True)
         for obj in objects:
             minio_client.remove_object(bucket, obj.object_name)
-        print(f"\033[1;32m        ########    Bucket '{bucket}' cleaned.\033[0m")
+        print(f"\033[1;32m ########  Bucket '{bucket}' cleaned.\033[0m")

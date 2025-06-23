@@ -12,7 +12,7 @@ def grab_data(year: int, month: int):
     file_name = f"{year}-{month_abbr}.csv.gz"
     url = f"https://data.rees46.com/datasets/marketplace/{file_name}"
 
-    save_dir = os.path.join("..", "data")
+    save_dir = os.path.join("..", "data","raw")
     os.makedirs(save_dir, exist_ok=True)
     file_path = os.path.join(save_dir, file_name)
 

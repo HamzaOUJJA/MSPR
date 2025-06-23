@@ -1,11 +1,8 @@
-import os
-from pyspark.sql import SparkSession
+def dump_to_minio_spark(year, month):
+    import os
+    import calendar
+    from pyspark.sql import SparkSession
 
-
-
-
-
-def dump_to_minio_spark():
     os.environ['PYSPARK_SUBMIT_ARGS'] = '--conf spark.driver.extraJavaOptions="-Djava.security.manager=allow" pyspark-shell'
     os.environ['SPARK_LOCAL_IP'] = '127.0.0.1'
 
@@ -22,12 +19,20 @@ def dump_to_minio_spark():
         bucket = "mspr-minio-bucket"
         if not client.bucket_exists(bucket):
             client.make_bucket(bucket)
-            print(f"\033[1;34m[SPARK WORKER] Bucket '{bucket}' created.\033[0m")
 
-        object_name = os.path.relpath(file_path, os.path.abspath("../data"))
+        object_name = os.path.relpath(file_path, os.path.abspath("../data/raw"))
         client.fput_object(bucket, object_name, file_path)
         print(f"\033[1;32m[SPARK WORKER] Uploaded {object_name}\033[0m")
 
+    # Build file name based on year and month
+    file_name = f"{year}-{calendar.month_abbr[month]}.csv.gz"
+    file_path = os.path.abspath(os.path.join("..", "data", "raw", file_name))
+
+    if not os.path.exists(file_path):
+        print(f"\033[1;31m[ERROR] File {file_name} not found in ../data/raw\033[0m")
+        return
+
+    # Initialize Spark
     spark = SparkSession.builder \
         .appName("SparkMinIOUploader") \
         .master("local[*]") \
@@ -35,16 +40,7 @@ def dump_to_minio_spark():
 
     sc = spark.sparkContext
 
-    data_dir = os.path.abspath("../data")
-    file_paths = [
-        os.path.join(root, file)
-        for root, _, files in os.walk(data_dir)
-        for file in files
-    ]
+    # Upload the single file
+    sc.parallelize([file_path]).foreach(upload_to_minio)
 
-    print(f"\033[1;36m[MAIN] Found {len(file_paths)} file(s) to upload.\033[0m")
-
-    sc.parallelize(file_paths).foreach(upload_to_minio)
-
-    print("\033[1;35m[MAIN] Upload job finished. Stopping Spark.\033[0m")
     spark.stop()
