@@ -1,39 +1,26 @@
-import time
-from grab_data import grab_data
-from dump_to_minio import dump_to_minio
-from dump_to_minio_spark import dump_to_minio_spark
-from load_data_from_minio import load_data_from_minio
-from clean_data import clean_data
-from dump_to_warehouse import dump_to_warehouse
+import traceback
+from datetime           import datetime
+from process_data       import process_data
 
-try:
 
-    time_1 = time.time()
 
-    #df_oct = load_data(2019, 10)
-    #df_nov = load_data(2019, 11)
-    #df_dec = load_data(2019, 12)
-    #df_jan = load_data(2020, 1) 
-    #df_feb = load_data(2020, 2) 
-    #df_mar = load_data(2020, 3) 
-    #df_apr = load_data(2020, 4) 
 
-    #df = (df_oct
-            #.union(df_nov)
-            #.union(df_dec)
-            #.union(df_jan)
-            #.union(df_feb)
-            #.union(df_mar)
-            #.union(df_apr)
-    #    )
+if __name__ == "__main__":
+    today = datetime.today()
+    
+    # Only run on the 1st of the month
+    if today.day == 1:
+        print(f"🕒 Running scheduled monthly job for {today.strftime('%Y-%m')}")
+        try:
+            process_data()
+        except Exception as e:
+            print(f"\033[1;31m🚨 Fatal error: {e}\033[0m")
+            traceback.print_exc()
+    else:
+        print("⏭️ Not the 1st of the month. Skipping ETL run.")
 
-    #df.show()
+# crontab -e
+# 0 7 * * * /path/to/your/venv/bin/python /path/to/main.py >> /path/to/logs/monthly_etl.log 2>&1
 
-    dump_to_warehouse(2019, 12)
-   
-    time_2 = time.time() - time_1
 
-    print(f"\033[1;34m⏱️ Time taken for upload: {time_2:.2f} seconds\033[0m")
-except Exception as e:
-    print(f"\033[1;31m❌ An error occurred: {e}\033[0m")   
 

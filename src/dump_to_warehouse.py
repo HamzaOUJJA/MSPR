@@ -13,15 +13,15 @@ def dump_to_warehouse(year: int, month: int):
 
     # Abbreviated month name like 'Oct'
     month_abbr = calendar.month_abbr[month]
-    cleaned_file_name = f"cleaned_{year}-{month_abbr}.csv.gz"
-    file_path = os.path.abspath(os.path.join("..", "data", "cleaned", cleaned_file_name))
+    cleaned_file_name = f"clustered_{year}-{month_abbr}.csv.gz"
+    file_path = os.path.abspath(os.path.join("..", "data", "clustered", cleaned_file_name))
 
     if not os.path.exists(file_path):
         print(f"\033[1;31mFile {file_path} does not exist.\033[0m")
         return
 
     # Table name derived from filename (without 'cleaned_' and extension, e.g. '2019-Oct')
-    base_name = cleaned_file_name.replace("cleaned_", "").replace(".csv.gz", "").replace("-", "_").lower()
+    base_name = cleaned_file_name.replace("clustered_", "").replace(".csv.gz", "").replace("-", "_").lower()
     table_name = f"data_{base_name}"
 
     # Start Spark session with PostgreSQL driver
