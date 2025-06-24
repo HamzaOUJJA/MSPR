@@ -3,14 +3,14 @@ from grab_data import grab_data
 from dump_to_minio import dump_to_minio
 from dump_to_minio_spark import dump_to_minio_spark
 from load_data_from_minio import load_data_from_minio
-from load_data import load_data
-
+from clean_data import clean_data
+from dump_to_warehouse import dump_to_warehouse
 
 try:
 
     time_1 = time.time()
 
-    df_oct = load_data(2019, 10)
+    #df_oct = load_data(2019, 10)
     #df_nov = load_data(2019, 11)
     #df_dec = load_data(2019, 12)
     #df_jan = load_data(2020, 1) 
@@ -18,18 +18,18 @@ try:
     #df_mar = load_data(2020, 3) 
     #df_apr = load_data(2020, 4) 
 
-    df = (df_oct
+    #df = (df_oct
             #.union(df_nov)
             #.union(df_dec)
             #.union(df_jan)
             #.union(df_feb)
             #.union(df_mar)
             #.union(df_apr)
-        )
+    #    )
 
-    df.show()
+    #df.show()
 
-    print(f"df_oct shape: ({df_oct.count()}, {len(df_oct.columns)})")
+    dump_to_warehouse(2019, 12)
    
     time_2 = time.time() - time_1
 

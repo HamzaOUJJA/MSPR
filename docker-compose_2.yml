@@ -24,6 +24,7 @@ services:
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
+      POSTGRES_DB: amazing_mspr_db
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     networks:
