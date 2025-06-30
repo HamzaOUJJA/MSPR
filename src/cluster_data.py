@@ -1,95 +1,123 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, sum as _sum, count, countDistinct
-from pyspark.ml.feature import VectorAssembler, StandardScaler
-from pyspark.ml.clustering import KMeans, KMeansModel
-from pyspark.ml import Pipeline
-from pyspark.ml import PipelineModel
-import calendar
 import os
-import shutil
-import re
+import sys
+import calendar
+import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.cluster import KMeans
+import xgboost as xgb
+from colorama import Fore, init
+import gzip
+import warnings
+import contextlib
+init(autoreset=True)
 
 
-def get_latest_model_version(model_base_path: str) -> int:
-    if not os.path.exists(model_base_path):
-        return 0
-    version_dirs = [d for d in os.listdir(model_base_path) if re.match(r'v\d+', d)]
-    if not version_dirs:
-        return 0
-    return max(int(re.search(r'\d+', d).group()) for d in version_dirs)
+@contextlib.contextmanager
+def suppress_stderr():
+    with open(os.devnull, "w") as fnull:
+        old_stderr = sys.stderr
+        sys.stderr = fnull
+        try:
+            yield
+        finally:
+            sys.stderr = old_stderr
 
-def cluster_data(year: int, month: int, n_clusters: int = 4):
-    os.environ['PYSPARK_SUBMIT_ARGS'] = '--conf spark.driver.extraJavaOptions="-Djava.security.manager=allow" pyspark-shell'
-    os.environ['SPARK_LOCAL_IP'] = '127.0.0.1'
+def cluster_data(year: int, month: int, n_components: int = 2, n_clusters: int = 5):
+    chunksize = 100_000
+
+    print(f"{Fore.CYAN}Reading CSV file...")
 
     month_abbr = calendar.month_abbr[month]
-    filename = f"cleaned_{year}-{month_abbr}.csv.gz"
-    input_path = os.path.join("..", "data", "cleaned", filename)
-    output_dir = os.path.join("..", "data", "clustered")
-    os.makedirs(output_dir, exist_ok=True)
-    temp_output_dir = os.path.join(output_dir, f"_temp_clustered_{year}-{month_abbr}")
-    final_output_file_path = os.path.join(output_dir, f"clustered_{year}-{month_abbr}.csv.gz")
+    input_path = os.path.join("..", "data", "cleaned", f"cleaned_{year}-{month_abbr}.csv.gz")
+    output_path = os.path.join("..", "data", "clustered", f"clustered_{year}-{month_abbr}.csv.gz")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     if not os.path.exists(input_path):
-        print(f"\033[1;31m❌ File does not exist: {input_path}\033[0m")
         return
 
-    spark = SparkSession.builder.appName("ClusteringUsers").getOrCreate()
+    # Count total lines
+    with gzip.open(input_path, "rt") as f:
+        total_lines = sum(1 for _ in f) - 1  # exclude header
 
-    print(f"\033[1;34m📂 Loading file: {input_path}\033[0m")
-    df = spark.read.option("header", True).option("inferSchema", True).csv(input_path)
+    with gzip.open(input_path, "rt") as f_in, gzip.open(output_path, "wt") as f_out:
+        reader = pd.read_csv(f_in, chunksize=chunksize)
+        header_written = False
+        processed_lines = 0
 
-    print("🔧 Aggregating features...")
-    df_features = df.groupBy("user_id").agg(
-        count(when(col("event_type") == "view", True)).alias("views"),
-        count(when(col("event_type") == "cart", True)).alias("carts"),
-        count(when(col("event_type") == "remove_from_cart", True)).alias("removals"),
-        count(when(col("event_type") == "purchase", True)).alias("purchases"),
-        countDistinct("user_session").alias("sessions"),
-        _sum("price").alias("total_spent")
-    ).na.fill(0)
+        for chunk in reader:
+            df = chunk.copy()
+            processed_lines += len(df)
+            progress = (processed_lines / total_lines) * 100
+            sys.stdout.write(f"\rClustering the data: {progress:.2f}%")
+            sys.stdout.flush()
 
-    feature_cols = ["views", "carts", "removals", "purchases", "sessions", "total_spent"]
-    assembler = VectorAssembler(inputCols=feature_cols, outputCol="features_vec")
-    scaler = StandardScaler(inputCol="features_vec", outputCol="scaled_features", withStd=True, withMean=True)
+            df['event_time'] = pd.to_datetime(df['event_time'], errors='coerce')
+            df = df.dropna(subset=['event_time'])
+            if df.empty:
+                continue
+            current_date = df['event_time'].max()
 
-    # Model directory setup
-    model_base_path = os.path.join("..", "Models", f"kmeans_model_k{n_clusters}")
-    os.makedirs(model_base_path, exist_ok=True)
+            rfm = df.groupby('user_id').agg({
+                'event_time': lambda x: (current_date - x.max()).days,
+                'user_session': pd.Series.nunique,
+                'price': 'sum'
+            }).reset_index()
+            rfm.columns = ['user_id', 'recency', 'frequency', 'monetary']
 
-    latest_version = get_latest_model_version(model_base_path)
-    model_path = os.path.join(model_base_path, f"v{latest_version}")
+            activity = df.groupby('user_id').agg({
+                'event_type': list,
+                'price': 'sum',
+                'user_session': pd.Series.nunique
+            }).reset_index()
 
-    print("🤖 Training new KMeans model...")
-    kmeans = KMeans(featuresCol="scaled_features", predictionCol="cluster", k=n_clusters, seed=42)
-    pipeline = Pipeline(stages=[assembler, scaler, kmeans])
-    model = pipeline.fit(df_features)
+            for etype in ['view', 'cart', 'remove_from_cart', 'purchase']:
+                activity[etype + 's'] = activity['event_type'].apply(lambda x: x.count(etype))
 
-    next_version = latest_version + 1
-    save_path = os.path.join(model_base_path, f"v{next_version}")
-    print(f"💾 Saving model to {save_path}")
-    model.save(save_path)
+            activity = activity[['user_id', 'views', 'carts', 'remove_from_carts', 'purchases', 'user_session', 'price']]
+            activity.columns = ['user_id', 'views', 'carts', 'removals', 'purchases', 'sessions', 'total_spent']
 
-    clustered_features = model.transform(df_features).select("user_id", "cluster")
+            merged = pd.merge(rfm, activity, on='user_id', how='inner').fillna(0)
+            if merged.empty:
+                continue
 
-    print("🔗 Joining clusters to full data...")
-    df_with_cluster = df.join(clustered_features, on="user_id", how="left")
+            features = ["views", "carts", "removals", "purchases", "sessions", "total_spent", "recency", "frequency", "monetary"]
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(merged[features])
 
-    print("💾 Writing clustered data to compressed CSV...")
-    df_with_cluster.coalesce(1).write \
-        .mode("overwrite") \
-        .option("header", "true") \
-        .option("compression", "gzip") \
-        .csv(temp_output_dir)
+            pca = PCA(n_components=n_components)
+            X_pca = pca.fit_transform(X_scaled)
+            merged['pca1'] = X_pca[:, 0]
+            if n_components > 1:
+                merged['pca2'] = X_pca[:, 1]
 
-    print(f"📦 Step 5: Moving the part file to {final_output_file_path}...")
-    part_files = [f for f in os.listdir(temp_output_dir) if f.startswith("part-") and f.endswith(".csv.gz")]
+            merged['high_spender'] = (merged['monetary'] > 1000).astype(int)
+            X = merged[['pca1'] + (['pca2'] if n_components > 1 else [])]
+            y = merged['high_spender']
 
-    if len(part_files) == 1:
-        shutil.move(os.path.join(temp_output_dir, part_files[0]), final_output_file_path)
-        shutil.rmtree(temp_output_dir)
-        print(f"\033[1;32m✅ Final clustered file saved: {final_output_file_path}\033[0m")
-    else:
-        print(f"\033[1;33m⚠️ Warning: Expected 1 part file but found {len(part_files)}. Check {temp_output_dir}\033[0m")
+            with suppress_stderr(), warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model = xgb.XGBClassifier(eval_metric="logloss")
+                model.fit(X, y)
 
-    spark.stop()
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            merged['cluster'] = kmeans.fit_predict(X)
+
+            cluster_names = {
+                0: "Occasional Spender",
+                1: "Window Shopper",
+                2: "Loyal Customer",
+                3: "Heavy Cart User",
+                4: "Top Spender"
+            }
+            merged['cluster_name'] = merged['cluster'].map(cluster_names).fillna("Other")
+
+            cluster_map = dict(zip(merged['user_id'], merged['cluster_name']))
+            df['cluster'] = df['user_id'].map(cluster_map).fillna("Unknown")
+
+            df.to_csv(f_out, index=False, header=not header_written)
+            f_out.flush()  # <--- forcer l’écriture sur disque
+            header_written = True
+
+    sys.stdout.write("\rClustering the data: 100.00%\n")

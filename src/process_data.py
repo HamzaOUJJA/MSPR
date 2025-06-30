@@ -6,9 +6,9 @@ from grab_data              import grab_data
 from dump_to_minio          import dump_to_minio
 from dump_to_minio_spark    import dump_to_minio_spark
 from load_data_from_minio   import load_data_from_minio
-from clean_data             import clean_data
+from src.clean_data_spark             import clean_data
 from dump_to_warehouse      import dump_to_warehouse
-from cluster_data           import cluster_data
+from src.cluster_data_spark           import cluster_data
 from update_processed_json  import update_processed_json
 
 

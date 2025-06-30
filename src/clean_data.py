@@ -1,102 +1,86 @@
 import os
 import calendar
-import shutil # Import shutil for directory removal
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, to_timestamp, trim, lower, year, month
+import pandas as pd
+from colorama import Fore, Style, init
+import gzip
 
 
-
-
+# Initialize colorama
+init(autoreset=True)
 
 def clean_data(y, m):
-    # ⏬ Parameters moved inside the function
-    chunk_fraction = 0.001  # = 0.1%
-    max_chunks = 100        # max number of chunks to process
-
-    spark = SparkSession.builder \
-        .appName("amazing_MSPR1") \
-        .config("spark.driver.memory", "20g") \
-        .config("spark.executor.cores", "4") \
-        .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
-        .getOrCreate()
+    chunksize = 100_000
 
     raw_data_dir = os.path.join("..", "data", "raw")
     file_path = os.path.join(raw_data_dir, f"{y}-{calendar.month_abbr[m]}.csv.gz")
-    print(f"Reading file: {file_path}")
+    print(f"{Fore.CYAN}Reading CSV file...")
 
-    # Read once for schema and quantiles
-    df_full = spark.read.csv(file_path, header=True, inferSchema=True)
-
-    total_rows = df_full.count()
-    print(f"📊 Total rows in full dataset: {total_rows}")
-
-    print("Calculating price quantiles...")
-    quantiles = df_full.approxQuantile("price", [0.25, 0.75], 0.01)
-    q1, q3 = quantiles
+    # Step 2: Estimate price quantiles using a 100,000-row sample
+    sample_df = pd.read_csv(file_path, compression="gzip", nrows=100_000)
+    q1 = sample_df["price"].quantile(0.25)
+    q3 = sample_df["price"].quantile(0.75)
     iqr = q3 - q1
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
-    del df_full  # Free memory
 
+    # Step 3: Prepare output
     base_output_dir = os.path.join("..", "data", "cleaned")
-    final_output_dir = os.path.join(base_output_dir, f"chunk_cleaned_{y}-{calendar.month_abbr[m]}_dir")
-    os.makedirs(final_output_dir, exist_ok=True)
+    os.makedirs(base_output_dir, exist_ok=True)
+    output_file_name = f"cleaned_{y}-{calendar.month_abbr[m]}.csv.gz"
+    output_file_path = os.path.join(base_output_dir, output_file_name)
 
-    print("🚀 Starting to clean chunks...")
-    processed_rows = 0
+    if os.path.exists(output_file_path):
+        os.remove(output_file_path)
 
-    for chunk_id in range(max_chunks):
-        print(f"\n▶️ Chunk {chunk_id + 1}/{max_chunks}")
-        df_chunk = spark.read.csv(file_path, header=True, inferSchema=True).sample(fraction=chunk_fraction, seed=chunk_id)
+    # Step 4: Count total number of lines (excluding header)
+    with gzip.open(file_path, "rt") as f:
+        total_lines = sum(1 for _ in f) - 1
 
-        chunk_count = df_chunk.count()
-        if chunk_count == 0:
-            print("No more data to process or chunk was empty.")
-            break
+    if total_lines <= 0:
+        print(f"{Fore.RED}❌ ERROR: Total line count is 0. Cannot proceed.")
+        return
 
-        df_clean = (
-            df_chunk.fillna({'brand': 'unknown', 'category_code': 'unknown'})
-              .dropna(subset=['user_id', 'product_id', 'user_session'])
-              .dropDuplicates()
-              .filter((col("price") >= 0) & (col("price").isNotNull()))
-              .filter((col("price") >= lower_bound) & (col("price") <= upper_bound))
-              .withColumn('event_time', to_timestamp('event_time'))
-              .withColumn('brand', trim(lower(col('brand'))))
-              .withColumn('category_code', trim(lower(col('category_code'))))
-              .withColumn('event_year', year('event_time'))
-              .withColumn('event_month', month('event_time'))
-        )
+    processed_lines = 0
+    chunk_no = 1
 
-        if df_clean.rdd.isEmpty():
-            print("Chunk cleaned to empty — skipping write.")
-            continue
+    # Step 5: Process file in chunks
+    for chunk in pd.read_csv(file_path, compression="gzip", chunksize=chunksize):
+        df = chunk.copy()
 
-        chunk_output_path = os.path.join(final_output_dir, f"chunk_{chunk_id}.csv.gz")
-        df_clean.coalesce(1).write \
-            .mode("overwrite") \
-            .option("header", "true") \
-            .option("compression", "gzip") \
-            .csv(chunk_output_path)
+        # Fill missing values
+        df["brand"] = df["brand"].fillna("unknown")
+        df["category_code"] = df["category_code"].fillna("unknown")
 
-        part_file = [f for f in os.listdir(chunk_output_path) if f.startswith('part-') and f.endswith('.csv.gz')]
-        if part_file:
-            os.rename(
-                os.path.join(chunk_output_path, part_file[0]),
-                os.path.join(final_output_dir, f"cleaned_chunk_{chunk_id}.csv.gz")
-            )
-            shutil.rmtree(chunk_output_path)
-            print(f"✅ Saved: cleaned_chunk_{chunk_id}.csv.gz")
-        else:
-            print(f"⚠️ Chunk {chunk_id} was written but no part file found.")
+        # Drop rows with NA in critical columns
+        df.dropna(subset=["user_id", "product_id", "user_session"], inplace=True)
 
-        # Update and print progress
-        processed_rows += chunk_count
-        percent_processed = min(100.0, (processed_rows / total_rows) * 100)
-        print(f"📈 Progress: {processed_rows:,} rows processed (~{percent_processed:.2f}%)")
+        # Remove duplicates
+        df.drop_duplicates(inplace=True)
 
-    print(f"\n🏁 All chunks processed and saved in: {final_output_dir}")
-    spark.stop()
+        # Filter price values
+        df = df[df["price"].notna() & (df["price"] >= 0)]
+        df = df[(df["price"] >= lower_bound) & (df["price"] <= upper_bound)]
 
+        # Parse datetime and extract parts
+        df["event_time"] = pd.to_datetime(df["event_time"], errors="coerce")
+        df["event_year"] = df["event_time"].dt.year
+        df["event_month"] = df["event_time"].dt.month
+
+        # Clean string columns
+        df["brand"] = df["brand"].str.strip().str.lower()
+        df["category_code"] = df["category_code"].str.strip().str.lower()
+
+        # Append cleaned chunk to output file
+        df.to_csv(output_file_path, mode="a", index=False, compression="gzip", header=(chunk_no == 1))
+
+        # Update progress with a single updating line
+        processed_lines += len(chunk)
+        progress = (processed_lines / total_lines) * 100
+        print(f"\r{Fore.BLUE}Cleaning the data:  {progress:.2f}%", end="")
+
+        chunk_no += 1
+
+    print(f"\n{Fore.GREEN}✅ Done! {Style.BRIGHT}Cleaned data saved to: {Fore.YELLOW}{output_file_path}")
 
 
 
@@ -124,77 +108,58 @@ def clean_data(y, m):
 
 
 
-def clean_data_1(y, m):
-    spark = SparkSession.builder \
-        .appName("amazing_MSPR1") \
-        .config("spark.driver.memory", "20g") \
-        .config("spark.executor.cores", "4") \
-        .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
-        .getOrCreate()
 
+
+
+
+
+def clean_data_no_chunks(y, m):
     raw_data_dir = os.path.join("..", "data", "raw")
     file_path = os.path.join(raw_data_dir, f"{y}-{calendar.month_abbr[m]}.csv.gz")
     print("Step 1: Reading CSV file...")
 
-    df = spark.read.csv(file_path, header=True, inferSchema=True)
-    print("Step 2: Calculating price quantiles...")
+    df = pd.read_csv(file_path, compression="gzip")
 
-    quantiles = df.approxQuantile("price", [0.25, 0.75], 0.01)
-    q1, q3 = quantiles
+    print("Step 2: Calculating price quantiles...")
+    q1 = df["price"].quantile(0.25)
+    q3 = df["price"].quantile(0.75)
     iqr = q3 - q1
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
+
     print("Step 3: Cleaning and transforming data...")
+    df_clean = df.copy()
 
-    df_clean = (
-        df.fillna({'brand': 'unknown', 'category_code': 'unknown'})
-          .dropna(subset=['user_id', 'product_id', 'user_session'])
-          .dropDuplicates()
-          .filter((col("price") >= 0) & (col("price").isNotNull()))
-          .filter((col("price") >= lower_bound) & (col("price") <= upper_bound))
-          .withColumn('event_time', to_timestamp('event_time'))
-          .withColumn('brand', trim(lower(col('brand'))))
-          .withColumn('category_code', trim(lower(col('category_code'))))
-          .withColumn('event_year', year('event_time'))
-          .withColumn('event_month', month('event_time'))
-    )
+    # Fill missing brand/category_code with 'unknown'
+    df_clean["brand"] = df_clean["brand"].fillna("unknown")
+    df_clean["category_code"] = df_clean["category_code"].fillna("unknown")
 
-    print("Step 4: Saving cleaned data to a temporary directory...")
+    # Drop rows with any NA in critical columns
+    df_clean.dropna(subset=["user_id", "product_id", "user_session"], inplace=True)
 
-    # Define the base output directory for cleaned data
+    # Remove duplicates
+    df_clean.drop_duplicates(inplace=True)
+
+    # Filter price conditions
+    df_clean = df_clean[df_clean["price"].notna() & (df_clean["price"] >= 0)]
+    df_clean = df_clean[(df_clean["price"] >= lower_bound) & (df_clean["price"] <= upper_bound)]
+
+    # Parse datetime and extract year/month
+    df_clean["event_time"] = pd.to_datetime(df_clean["event_time"], errors="coerce")
+    df_clean["event_year"] = df_clean["event_time"].dt.year
+    df_clean["event_month"] = df_clean["event_time"].dt.month
+
+    # Clean text columns
+    df_clean["brand"] = df_clean["brand"].str.strip().str.lower()
+    df_clean["category_code"] = df_clean["category_code"].str.strip().str.lower()
+
+    print("Step 4: Saving cleaned data...")
+
     base_output_dir = os.path.join("..", "data", "cleaned")
-    # Define a temporary directory for Spark's output
-    temp_output_dir = os.path.join(base_output_dir, f"temp_cleaned_{y}-{calendar.month_abbr[m]}_csv")
-    
-    # Define the final desired single file name
+    os.makedirs(base_output_dir, exist_ok=True)
+
     final_output_file_name = f"cleaned_{y}-{calendar.month_abbr[m]}.csv.gz"
     final_output_file_path = os.path.join(base_output_dir, final_output_file_name)
 
-    # Ensure the base output directory exists
-    os.makedirs(base_output_dir, exist_ok=True)
-
-    # Coalesce to 1 partition and write to the temporary directory
-    # This will create 'temp_cleaned_YYYY-Mon_csv/part-00000-....csv.gz'
-    df_clean.coalesce(1).write \
-        .mode("overwrite") \
-        .option("header", "true") \
-        .option("compression", "gzip") \
-        .csv(temp_output_dir) 
-    
-    print(f"Step 5: Moving the single part file to its final destination: {final_output_file_path}")
-
-    # After Spark writes, the actual data file will be inside temp_output_dir
-    # We need to find that single part file
-    part_files = [f for f in os.listdir(temp_output_dir) if f.startswith('part-') and f.endswith('.csv.gz')]
-
-    if len(part_files) == 1:
-        source_file_path = os.path.join(temp_output_dir, part_files[0])
-        # Move and rename the file
-        os.rename(source_file_path, final_output_file_path)
-        # Remove the temporary directory
-        shutil.rmtree(temp_output_dir)
-        print(f"✅ Cleaned data saved as single compressed CSV file: {final_output_file_path}")
-    else:
-        print(f"⚠️ Warning: Expected 1 part file but found {len(part_files)}. Data remains in temporary directory: {temp_output_dir}")
-
-    spark.stop()
+    df_clean.to_csv(final_output_file_path, index=False, compression="gzip")
+    print(f"✅ Cleaned data saved as: {final_output_file_path}")

@@ -19,13 +19,14 @@ def dump_to_minio():
         print(f"Bucket '{bucket}' created.")
 
     #clean_minio_bucket(minioClient, bucket) # Clean MinIO before uploading
-    baseDir = os.path.abspath("../raw/data") # Path to the folder containing the files
+    baseDir = os.path.abspath("../data/raw") # Path to the folder containing the files
 
     try:
         for root, _, files in os.walk(baseDir):  # Iterate through all files in the folder and upload them # Ignore dirs by replacing it with '_'
             for file in files:
                 # Upload only CSV or CSV.GZ files
                 if not file.lower().endswith(('.csv', '.csv.gz')):
+                    
                     continue
                 file_path = os.path.join(root, file)
                 object_name = os.path.relpath(file_path, baseDir)  # Preserve folder structure

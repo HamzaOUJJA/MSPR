@@ -1,4 +1,9 @@
 
 .DS_Store
-docs/Raport.pdf
+docs/Raport 1.pdf
+docs/Présentation 1.pdf
 data/raw
+data/cleaned
+data/clustered
+test.py
+minio/.minio.sys

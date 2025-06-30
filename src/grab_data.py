@@ -35,3 +35,4 @@ def grab_data(year: int, month: int):
             print(f"\033[1;31mFailed to download. Status code: {response.status_code}\033[0m")
     except Exception as e:
         print("\033[1;31mError while downloading:\033[0m", e)
+
