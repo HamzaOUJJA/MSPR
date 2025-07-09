@@ -1,10 +1,12 @@
 
-from airflow import DAG
 import pendulum
 import sys
-from airflow.operators.python import PythonOperator
 import logging
-from process_data import process_data
+from datetime       import datetime
+from airflow        import DAG
+from process_data   import process_data
+from delete_data    import delete_data
+from airflow.operators.python import PythonOperator
 
 
 # Import modules
@@ -14,6 +16,34 @@ logger = logging.getLogger(__name__)
 
 
 
+# Function to delete data exactly 13 months old
+def delete_expired_table(**kwargs):
+    today = datetime.today()
+    year = today.year
+    month = today.month - 13
+
+    if month <= 0:
+        year -= 1
+        month += 12
+
+    delete_data(year, month)
+
+
+
+
+# DAG definition for data deletion
+with DAG(
+    dag_id="delete_13_months_old_table",
+    start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
+    schedule="@once",  # You can change to "0 0 1 * *" to run monthly
+    catchup=False,
+    tags=["cleanup", "monthly"],
+) as dag:
+
+    delete_old_data_task = PythonOperator(
+        task_id="delete_expired_table",
+        python_callable=delete_expired_table,
+    )
 
 
 with DAG(
