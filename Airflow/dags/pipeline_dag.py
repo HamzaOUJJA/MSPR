@@ -35,7 +35,7 @@ def delete_expired_table(**kwargs):
 with DAG(
     dag_id="delete_13_months_old_table",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
-    schedule="@once",  # You can change to "0 0 1 * *" to run monthly
+    schedule="@once",  
     catchup=False,
     tags=["cleanup", "monthly"],
 ) as dag:

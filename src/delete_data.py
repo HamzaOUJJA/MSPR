@@ -10,8 +10,8 @@ def delete_data(year: int, month: int):
 
     conn_params = {
         "dbname": "amazing_mspr_db",
-        "user": "your_user",
-        "password": "your_password",
+        "user": "admin",
+        "password": "admin",
         "host": "localhost",
         "port": 15432
     }
