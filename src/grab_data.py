@@ -3,10 +3,6 @@ import os
 import calendar
 
 def grab_data(year: int, month: int):
-    """
-    Downloads a REES46 marketplace .csv.gz file for a specific year and month
-    (with month written as a 3-letter abbreviation, e.g., 'Oct') and saves it to the ../data directory.
-    """
     # Convert numeric month to abbreviated month name (e.g., 10 → 'Oct')
     month_abbr = calendar.month_abbr[month]  # This returns 'Jan', 'Feb', etc.
     file_name = f"{year}-{month_abbr}.csv.gz"

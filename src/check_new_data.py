@@ -4,13 +4,8 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 def check_new_data():
-    """
-    Returns a list of (year, month) tuples from the last 10 months that haven't been processed yet.
-    Uses a JSON file to track already processed months.
-    """
-
     processed_json_path="../data/processed_months.json"
-    
+
     # Load processed months if the file exists
     if os.path.exists(processed_json_path):
         with open(processed_json_path, "r") as f:
